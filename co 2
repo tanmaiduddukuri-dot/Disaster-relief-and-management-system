@@ -1,0 +1,182 @@
+import heapq
+from collections import deque
+from typing import Dict, List, Tuple, Optional
+import time
+
+GRAPH: Dict[str, List[Tuple[str, int]]] = {
+    "Warehouse": [("CampA", 5), ("CampB", 10)],
+    "CampA":     [("Warehouse", 5), ("CampC", 3), ("CampD", 7)],
+    "CampB":     [("Warehouse", 10), ("CampC", 2)],
+    "CampC":     [("CampA", 3), ("CampB", 2), ("CampD", 4)],
+    "CampD":     [("CampA", 7), ("CampC", 4)]
+}
+
+def heuristic(node: str, goal: str) -> int:
+    """Admissible heuristic: min outgoing edge weight (never overestimates)."""
+    if node == goal:
+        return 0
+    min_edge = {"Warehouse": 5, "CampA": 3, "CampB": 2, "CampC": 2, "CampD": 0}
+    return min_edge.get(node, 0)
+
+# ------------------------------------------------
+# BFS — unweighted shortest path (fewest hops)
+# ------------------------------------------------
+def bfs(start: str, goal: str) -> Tuple[Optional[List[str]], int]:
+    queue = deque([(start, [start])])
+    visited = {start}
+    expansions = 0
+    while queue:
+        node, path = queue.popleft()
+        expansions += 1
+        if node == goal:
+            return path, expansions
+        for neighbor, _ in GRAPH.get(node, []):
+            if neighbor not in visited:
+                visited.add(neighbor)
+                queue.append((neighbor, path + [neighbor]))
+    return None, expansions
+
+# ------------------------------------------------
+# DFS — depth-first (not optimal)
+# ------------------------------------------------
+def dfs(start: str, goal: str) -> Tuple[Optional[List[str]], int]:
+    stack = [(start, [start])]
+    visited = set()
+    expansions = 0
+    while stack:
+        node, path = stack.pop()
+        if node in visited:
+            continue
+        visited.add(node)
+        expansions += 1
+        if node == goal:
+            return path, expansions
+        for neighbor, _ in GRAPH.get(node, []):
+            if neighbor not in visited:
+                stack.append((neighbor, path + [neighbor]))
+    return None, expansions
+
+# ------------------------------------------------
+# UCS — optimal by cost
+# ------------------------------------------------
+def ucs(start: str, goal: str) -> Tuple[Optional[List[str]], int, int]:
+    pq = [(0, start, [start])]
+    visited: Dict[str, int] = {}
+    expansions = 0
+    while pq:
+        cost, node, path = heapq.heappop(pq)
+        if node in visited:
+            continue
+        visited[node] = cost
+        expansions += 1
+        if node == goal:
+            return path, cost, expansions
+        for neighbor, w in GRAPH.get(node, []):
+            if neighbor not in visited:
+                heapq.heappush(pq, (cost + w, neighbor, path + [neighbor]))
+    return None, float("inf"), expansions
+
+# ------------------------------------------------
+# Greedy Best-First — heuristic only, not optimal
+# ------------------------------------------------
+def greedy(start: str, goal: str) -> Tuple[Optional[List[str]], int, int]:
+    pq = [(heuristic(start, goal), 0, start, [start])]
+    visited = set()
+    expansions = 0
+    while pq:
+        h, cost, node, path = heapq.heappop(pq)
+        if node in visited:
+            continue
+        visited.add(node)
+        expansions += 1
+        if node == goal:
+            return path, cost, expansions
+        for neighbor, w in GRAPH.get(node, []):
+            if neighbor not in visited:
+                heapq.heappush(pq, (heuristic(neighbor, goal), cost + w, neighbor, path + [neighbor]))
+    return None, float("inf"), expansions
+
+# ------------------------------------------------
+# A* — optimal, heuristic-guided
+# ------------------------------------------------
+def astar(start: str, goal: str) -> Tuple[Optional[List[str]], int, int]:
+    pq = [(heuristic(start, goal), 0, start, [start])]
+    g_score: Dict[str, int] = {start: 0}
+    visited = set()
+    expansions = 0
+    while pq:
+        f, g, node, path = heapq.heappop(pq)
+        if node in visited:
+            continue
+        visited.add(node)
+        expansions += 1
+        if node == goal:
+            return path, g, expansions
+        for neighbor, w in GRAPH.get(node, []):
+            if neighbor not in visited:
+                tg = g + w
+                if tg < g_score.get(neighbor, float("inf")):
+                    g_score[neighbor] = tg
+                    nh = heuristic(neighbor, goal)
+                    heapq.heappush(pq, (tg + nh, tg, neighbor, path + [neighbor]))
+    return None, float("inf"), expansions
+
+# ------------------------------------------------
+# Admissibility Check
+# ------------------------------------------------
+def check_admissibility(goal: str) -> None:
+    print(f"\n  Admissibility Check (goal={goal}):")
+    print(f"  {'Node':<12} {'h(n)':<8} {'True cost':<12} {'Admissible?'}")
+    print("  " + "-" * 40)
+    for node in GRAPH:
+        _, true_cost, _ = ucs(node, goal)
+        h = heuristic(node, goal)
+        ok = h <= true_cost
+        print(f"  {node:<12} {h:<8} {true_cost:<12} {'YES' if ok else 'NO !'}")
+
+# ------------------------------------------------
+# Empirical Profiling
+# ------------------------------------------------
+def profile_all(start: str, goal: str) -> None:
+    print(f"\n  Empirical Profile: {start} -> {goal}")
+    print(f"  {'Algorithm':<12} {'Path':<35} {'Cost':<6} {'Expansions':<12} {'Time(ms)'}")
+    print("  " + "-" * 78)
+
+    def run(name, fn, *args):
+        t0 = time.perf_counter()
+        result = fn(*args)
+        t1 = time.perf_counter()
+        path = result[0]
+        cost = result[1]
+        exps = result[2] if len(result) > 2 else result[1]
+        ms   = round((t1 - t0) * 1000, 3)
+        path_str = " -> ".join(path) if path else "None"
+        if name in ("BFS", "DFS"):
+            print(f"  {name:<12} {path_str:<35} {'N/A':<6} {cost:<12} {ms}")
+        else:
+            print(f"  {name:<12} {path_str:<35} {cost:<6} {exps:<12} {ms}")
+
+    bfs_r  = bfs(start, goal)
+    dfs_r  = dfs(start, goal)
+    ucs_r  = ucs(start, goal)
+    gbf_r  = greedy(start, goal)
+    ast_r  = astar(start, goal)
+
+    for name, r in [("BFS", bfs_r), ("DFS", dfs_r)]:
+        path_str = " -> ".join(r[0]) if r[0] else "None"
+        print(f"  {name:<12} {path_str:<35} {'N/A':<6} {r[1]:<12} -")
+    for name, r in [("UCS", ucs_r), ("Greedy", gbf_r), ("A*", ast_r)]:
+        path_str = " -> ".join(r[0]) if r[0] else "None"
+        print(f"  {name:<12} {path_str:<35} {r[1]:<6} {r[2]:<12} -")
+
+print("\n" + "=" * 52)
+print("   CO2: SEARCH ALGORITHMS")
+print("=" * 52)
+profile_all("Warehouse", "CampD")
+check_admissibility("CampD")
+print("\n  Tie-breaking note: A* uses (f, g) — lower g")
+print("  breaks ties among equal-f nodes (prefer longer")
+print("  actual progress over pure heuristic guessing).")
+print("\n" + "=" * 52)
+print("   CO2 Complete")
+print("=" * 52)
