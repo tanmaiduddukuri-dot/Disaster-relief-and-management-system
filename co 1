@@ -1,0 +1,116 @@
+from dataclasses import dataclass, field
+from typing import List, Dict, Tuple, Optional
+import heapq
+
+"""
+AGENT  : Disaster Relief Delivery Agent
+PEAS:
+  Performance : Minimize travel cost; maximize camps supplied
+  Environment : Weighted road network (graph)
+  Actuators   : Move to adjacent node, deliver supplies
+  Sensors     : Current location, road weights, camp demands
+"""
+
+GRAPH: Dict[str, List[Tuple[str, int]]] = {
+    "Warehouse": [("CampA", 5), ("CampB", 10)],
+    "CampA":     [("Warehouse", 5), ("CampC", 3), ("CampD", 7)],
+    "CampB":     [("Warehouse", 10), ("CampC", 2)],
+    "CampC":     [("CampA", 3), ("CampB", 2), ("CampD", 4)],
+    "CampD":     [("CampA", 7), ("CampC", 4)]
+}
+
+@dataclass
+class State:
+    location: str
+    cost_so_far: int
+    path: List[str] = field(default_factory=list)
+
+    def __lt__(self, other: "State") -> bool:
+        return self.cost_so_far < other.cost_so_far
+
+    def __repr__(self) -> str:
+        return f"State(loc={self.location}, cost={self.cost_so_far})"
+
+def transition(state: State, neighbor: str, weight: int) -> State:
+    return State(
+        location=neighbor,
+        cost_so_far=state.cost_so_far + weight,
+        path=state.path + [neighbor]
+    )
+
+def ucs_with_trace(start: str, goal: str) -> Tuple[Optional[List[str]], int]:
+    initial = State(location=start, cost_so_far=0, path=[start])
+    frontier: List[State] = []
+    heapq.heappush(frontier, initial)
+    explored: Dict[str, int] = {}
+    expansions = 0
+
+    print(f"\n  [UCS Trace] {start} -> {goal}")
+    print(f"  {'Step':<5} {'Node':<14} {'g(cost)':<8} {'Frontier'}")
+    print("  " + "-" * 40)
+
+    while frontier:
+        state = heapq.heappop(frontier)
+        if state.location in explored and explored[state.location] <= state.cost_so_far:
+            continue
+        explored[state.location] = state.cost_so_far
+        expansions += 1
+        print(f"  {expansions:<5} {state.location:<14} {state.cost_so_far:<8} {len(frontier)}")
+
+        if state.location == goal:
+            print(f"\n  Total node expansions: {expansions}")
+            return state.path, state.cost_so_far
+
+        for neighbor, weight in GRAPH.get(state.location, []):
+            if neighbor not in explored:
+                heapq.heappush(frontier, transition(state, neighbor, weight))
+
+    return None, float("inf")
+
+def describe_environment() -> None:
+    props = {
+        "Observable":    "Fully — agent knows all edge weights",
+        "Deterministic": "Yes   — fixed transition outcomes",
+        "Episodic":      "No    — sequential decisions required",
+        "Static":        "Yes   — environment does not change",
+        "Discrete":      "Yes   — finite nodes and actions",
+        "Single-agent":  "Yes   — one delivery agent"
+    }
+    print("\n  PEAS — Environment Properties:")
+    for k, v in props.items():
+        print(f"    {k:<16}: {v}")
+
+def expansion_profile() -> None:
+    print("\n  Node Expansion Profile (from Warehouse):")
+    print(f"  {'Goal':<12} {'Expansions':<12} {'Optimal Cost'}")
+    print("  " + "-" * 34)
+    for g in ["CampA", "CampB", "CampC", "CampD"]:
+        frontier = [State("Warehouse", 0, ["Warehouse"])]
+        heapq.heapify(frontier)
+        explored: Dict[str, int] = {}
+        exp, result_cost = 0, 0
+        while frontier:
+            s = heapq.heappop(frontier)
+            if s.location in explored:
+                continue
+            explored[s.location] = s.cost_so_far
+            exp += 1
+            if s.location == g:
+                result_cost = s.cost_so_far
+                break
+            for nb, w in GRAPH.get(s.location, []):
+                if nb not in explored:
+                    heapq.heappush(frontier, transition(s, nb, w))
+        print(f"  {g:<12} {exp:<12} {result_cost}")
+
+print("\n" + "=" * 52)
+print("   CO1: PEAS + PYTHON AI FOUNDATIONS")
+print("=" * 52)
+describe_environment()
+path, cost = ucs_with_trace("Warehouse", "CampD")
+print(f"\n  Route : {' -> '.join(path)}")
+print(f"  Cost  : {cost}")
+expansion_profile()
+print("\n" + "=" * 52)
+print("   CO1 Complete")
+print("=" * 52)
