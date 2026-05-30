@@ -1,0 +1,233 @@
+import heapq, math, random
+from dataclasses import dataclass, field
+from typing import Dict, List, Tuple, Optional
+
+# ================================================
+# SHARED DATA
+# ================================================
+GRAPH: Dict[str, List[Tuple[str,int]]] = {
+    "Warehouse": [("CampA",5),("CampB",10)],
+    "CampA":     [("Warehouse",5),("CampC",3),("CampD",7)],
+    "CampB":     [("Warehouse",10),("CampC",2)],
+    "CampC":     [("CampA",3),("CampB",2),("CampD",4)],
+    "CampD":     [("CampA",7),("CampC",4)]
+}
+CAMP_NEEDS  = {"CampA":100,"CampB":150,"CampC":80,"CampD":70}
+CAMPS       = list(CAMP_NEEDS.keys())
+SLOTS       = [1,2,3,4]
+
+# ================================================
+# MODULE 1: Bayesian Risk Per Edge
+# ================================================
+EDGE_RISK: Dict[Tuple[str,str],float] = {
+    ("Warehouse","CampA"): 0.10,
+    ("Warehouse","CampB"): 0.35,
+    ("CampA","CampC"):     0.05,
+    ("CampA","CampD"):     0.20,
+    ("CampB","CampC"):     0.15,
+    ("CampC","CampD"):     0.10,
+}
+
+def edge_risk(a: str, b: str) -> float:
+    return EDGE_RISK.get((a,b), EDGE_RISK.get((b,a), 0.10))
+
+def risk_adjusted_cost(a: str, b: str, base_weight: int) -> float:
+    """Cost penalized by blockage probability."""
+    r = edge_risk(a, b)
+    return round(base_weight * (1 + r), 2)
+
+# ================================================
+# MODULE 2: A* with Risk-Adjusted Cost
+# ================================================
+def heuristic(node: str, goal: str) -> float:
+    if node == goal: return 0
+    return {"Warehouse":5,"CampA":3,"CampB":2,"CampC":2,"CampD":0}.get(node,0)
+
+def astar_risk(start: str, goal: str) -> Tuple[Optional[List[str]], float, List[str]]:
+    pq   = [(heuristic(start,goal), 0.0, start, [start])]
+    g_sc: Dict[str,float] = {start: 0.0}
+    vis  = set()
+    trace = [f"  A* start={start} goal={goal}"]
+
+    while pq:
+        f, g, node, path = heapq.heappop(pq)
+        if node in vis: continue
+        vis.add(node)
+        trace.append(f"    Expand {node:12s} g={g:.2f} f={f:.2f}")
+
+        if node == goal:
+            trace.append(f"  Goal reached. Cost={g:.2f}")
+            return path, g, trace
+
+        for nb, w in GRAPH.get(node, []):
+            if nb not in vis:
+                rc = risk_adjusted_cost(node, nb, w)
+                tg = g + rc
+                if tg < g_sc.get(nb, math.inf):
+                    g_sc[nb] = tg
+                    nh = heuristic(nb, goal)
+                    heapq.heappush(pq, (tg+nh, tg, nb, path+[nb]))
+                    trace.append(f"      -> {nb:12s} base={w} risk={edge_risk(node,nb):.2f} adj={rc:.2f}")
+    return None, math.inf, trace
+
+# ================================================
+# MODULE 3: CSP Scheduling
+# ================================================
+def csp_schedule() -> Optional[Dict[str,int]]:
+    def ok(assign: Dict[str,int]) -> bool:
+        vals = list(assign.values())
+        if len(vals) != len(set(vals)): return False
+        if "CampA" in assign and "CampD" in assign:
+            if assign["CampA"] >= assign["CampD"]: return False
+        if "CampB" in assign and "CampC" in assign:
+            if abs(assign["CampB"]-assign["CampC"]) <= 1: return False
+        return True
+
+    def bt(assign: Dict[str,int]) -> Optional[Dict[str,int]]:
+        if len(assign) == len(CAMPS): return assign
+        remaining = [c for c in CAMPS if c not in assign]
+        var = min(remaining, key=lambda v: sum(
+            1 for s in SLOTS if ok({**assign,v:s})))
+        for val in SLOTS:
+            test = {**assign, var: val}
+            if ok(test):
+                res = bt(test)
+                if res: return res
+        return None
+
+    return bt({})
+
+# ================================================
+# MODULE 4: Utility-Based Resource Allocation
+# ================================================
+def allocate_with_utility(supply: int) -> Dict[str,int]:
+    total_need = sum(CAMP_NEEDS.values())
+    # Priority by need (highest need first)
+    order = sorted(CAMP_NEEDS.keys(), key=lambda c: -CAMP_NEEDS[c])
+    alloc, remaining = {}, supply
+    for camp in order:
+        give = min(CAMP_NEEDS[camp], remaining)
+        alloc[camp] = give
+        remaining -= give
+    return alloc
+
+def utility_score(alloc: Dict[str,int]) -> float:
+    total_need = sum(CAMP_NEEDS.values())
+    return round(sum(
+        (CAMP_NEEDS[c]/total_need) * min(alloc.get(c,0)/CAMP_NEEDS[c],1.0)
+        for c in CAMPS), 4)
+
+# ================================================
+# MODULE 5: Explainability Report
+# ================================================
+def explain(path, cost, schedule, alloc, trace_lines):
+    print("\n  ╔══════════════════════════════════════════╗")
+    print("  ║     EXPLAINABILITY REPORT                ║")
+    print("  ╚══════════════════════════════════════════╝")
+
+    print("\n  [1] ROUTE DECISION")
+    if path:
+        print(f"      Path   : {' -> '.join(path)}")
+        print(f"      Cost   : {cost:.2f} (risk-adjusted)")
+        for i in range(len(path)-1):
+            a,b = path[i],path[i+1]
+            r = edge_risk(a,b)
+            print(f"      Edge {a}->{b}: risk={r:.0%} => penalised cost")
+    else:
+        print("      No route found.")
+
+    print("\n  [2] DELIVERY SCHEDULE (CSP)")
+    if schedule:
+        for slot in SLOTS:
+            camps_at = [c for c,s in schedule.items() if s==slot]
+            print(f"      Slot {slot}: {', '.join(camps_at) if camps_at else '-'}")
+        print("      Constraints satisfied: all-diff, CampA<CampD, B-C non-adjacent")
+    else:
+        print("      No schedule found.")
+
+    print("\n  [3] RESOURCE ALLOCATION")
+    for camp in CAMPS:
+        given = alloc.get(camp,0)
+        need  = CAMP_NEEDS[camp]
+        pct   = round(given/need*100)
+        bar   = "#"*int(pct/10) + "."*(10-int(pct/10))
+        status = "FULL" if given==need else ("PARTIAL" if given>0 else "NONE")
+        print(f"      {camp:<8}: [{bar}] {pct:>3}%  {given}/{need}  [{status}]")
+    print(f"      Utility score: {utility_score(alloc)}")
+
+    print("\n  [4] SEARCH TRACE (A*)")
+    for line in trace_lines[:10]:
+        print(line)
+    if len(trace_lines) > 10:
+        print(f"      ... ({len(trace_lines)-10} more lines)")
+
+# ================================================
+# MODULE 6: Ethics & Bias Check
+# ================================================
+def ethics_check(alloc: Dict[str,int]) -> None:
+    print("\n  [5] ETHICS & BIAS ANALYSIS")
+    total_need = sum(CAMP_NEEDS.values())
+    print("      Allocation fairness (need-proportional check):")
+    total_alloc = sum(alloc.values())
+    for camp in CAMPS:
+        fair_share = round(CAMP_NEEDS[camp] / total_need * total_alloc)
+        actual     = alloc.get(camp,0)
+        deviation  = actual - fair_share
+        flag       = " <-- UNDER-SERVED" if deviation < -20 else ""
+        print(f"      {camp:<8}: got={actual:>4}  fair={fair_share:>4}  dev={deviation:>+5}{flag}")
+
+    print("\n      Heuristic bias note:")
+    print("      h(n) uses fixed min-edge weights. If graph")
+    print("      topology changes (road added/removed), h may")
+    print("      become inadmissible -> A* loses optimality.")
+    print("      Mitigation: recompute h after graph updates.")
+
+    print("\n      Uncertainty miscalibration note:")
+    print("      Edge risk probabilities are estimated. Over-")
+    print("      estimating risk on certain corridors may bias")
+    print("      routes away from minority-area camps.")
+
+# ================================================
+# PERFORMANCE ANALYSIS
+# ================================================
+def perf_analysis() -> None:
+    import time
+    print("\n  [6] PERFORMANCE ANALYSIS")
+    print(f"  {'Component':<28} {'Time (ms)':<12} {'Notes'}")
+    print("  " + "-" * 55)
+
+    def timed(label, fn):
+        t0 = time.perf_counter()
+        res = fn()
+        ms = round((time.perf_counter()-t0)*1000, 3)
+        return res, ms
+
+    _, ms1 = timed("A* risk-adjusted", lambda: astar_risk("Warehouse","CampD"))
+    print(f"  {'A* (risk-adjusted)':<28} {ms1:<12} O(E log V)")
+
+    _, ms2 = timed("CSP backtracking", csp_schedule)
+    print(f"  {'CSP backtracking':<28} {ms2:<12} O(d^n) worst")
+
+    _, ms3 = timed("Resource allocation", lambda: allocate_with_utility(300))
+    print(f"  {'Resource allocation':<28} {ms3:<12} O(n log n)")
+
+# ================================================
+# MAIN
+# ================================================
+print("\n" + "=" * 52)
+print("   CO6: HYBRID AI — DISASTER RELIEF PLANNER")
+print("=" * 52)
+
+print("\n  Running all modules...")
+
+path, cost, trace = astar_risk("Warehouse", "CampD")
+schedule          = csp_schedule()
+alloc             = allocate_with_utility(300)
+
+explain(path, cost, schedule, alloc, trace)
+ethics_check(alloc)
+perf_analysis()
+
+print("\n" + "=" * 52)
+print("   CO6 Complete — Full Hybrid System")
+print("=" * 52)
