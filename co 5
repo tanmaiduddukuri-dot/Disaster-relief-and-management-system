@@ -1,0 +1,187 @@
+from typing import Dict, List, Tuple
+from functools import reduce
+
+# ================================================
+# BAYESIAN NETWORK
+#
+#   Weather (W)
+#      |
+#      v
+#   RoadBlock (R)  <-- Season (S)
+#      |
+#      v
+#   DeliveryDelay (D)
+#
+# Query: P(RoadBlock=yes | DeliveryDelay=yes)
+# ================================================
+
+# ------------------------------------------------
+# Prior Probabilities
+# ------------------------------------------------
+P_Weather = {"sunny": 0.6, "rainy": 0.4}
+P_Season  = {"dry": 0.5, "wet": 0.5}
+
+# ------------------------------------------------
+# Conditional Probability Tables (CPTs)
+# ------------------------------------------------
+# P(RoadBlock | Weather, Season)
+P_RoadBlock_given_WS: Dict[Tuple[str,str], Dict[str,float]] = {
+    ("sunny", "dry"):  {"yes": 0.05, "no": 0.95},
+    ("sunny", "wet"):  {"yes": 0.20, "no": 0.80},
+    ("rainy", "dry"):  {"yes": 0.30, "no": 0.70},
+    ("rainy", "wet"):  {"yes": 0.70, "no": 0.30},
+}
+
+# P(DeliveryDelay | RoadBlock)
+P_Delay_given_RB: Dict[str, Dict[str,float]] = {
+    "yes": {"yes": 0.90, "no": 0.10},
+    "no":  {"yes": 0.15, "no": 0.85},
+}
+
+# ------------------------------------------------
+# Bayes Rule Demo
+# ------------------------------------------------
+def bayes_rule_demo() -> None:
+    print("\n  --- Bayes Rule: P(RoadBlock | Delay) ---")
+    # P(Delay=yes | RB=yes) * P(RB=yes) / P(Delay=yes)
+    p_rb_yes = sum(
+        P_RoadBlock_given_WS[(w, s)]["yes"] * P_Weather[w] * P_Season[s]
+        for w in P_Weather for s in P_Season
+    )
+    p_rb_no  = 1 - p_rb_yes
+
+    p_delay_given_rb_yes = P_Delay_given_RB["yes"]["yes"]
+    p_delay_given_rb_no  = P_Delay_given_RB["no"]["yes"]
+
+    p_delay = p_delay_given_rb_yes * p_rb_yes + p_delay_given_rb_no * p_rb_no
+
+    p_rb_given_delay = (p_delay_given_rb_yes * p_rb_yes) / p_delay
+
+    print(f"  P(RoadBlock=yes)              = {p_rb_yes:.4f}")
+    print(f"  P(Delay=yes | RoadBlock=yes)  = {p_delay_given_rb_yes:.4f}")
+    print(f"  P(Delay=yes | RoadBlock=no)   = {p_delay_given_rb_no:.4f}")
+    print(f"  P(Delay=yes)                  = {p_delay:.4f}")
+    print(f"  P(RoadBlock=yes | Delay=yes)  = {p_rb_given_delay:.4f}")
+    return p_rb_given_delay
+
+# ------------------------------------------------
+# Variable Elimination (manual, worked example)
+# ------------------------------------------------
+def variable_elimination() -> None:
+    print("\n  --- Variable Elimination: P(Delay | Weather=rainy) ---")
+    # Sum out Season and RoadBlock
+    p_delay_rainy = {"yes": 0.0, "no": 0.0}
+    for s in P_Season:
+        for rb in ["yes", "no"]:
+            p_rb = P_RoadBlock_given_WS[("rainy", s)][rb] * P_Season[s]
+            for d in ["yes", "no"]:
+                p_delay_rainy[d] += p_rb * P_Delay_given_RB[rb][d]
+
+    total = sum(p_delay_rainy.values())
+    print(f"  P(Delay=yes | Weather=rainy) = {p_delay_rainy['yes']:.4f}")
+    print(f"  P(Delay=no  | Weather=rainy) = {p_delay_rainy['no']:.4f}")
+    print(f"  Normalisation check          : {total:.4f} (should be 1.0)")
+
+# ------------------------------------------------
+# HMM: Road State Tracking over time
+# (simplified — 2 states: blocked / clear)
+# ------------------------------------------------
+def hmm_tracking() -> None:
+    print("\n  --- HMM: Road State over 4 time steps ---")
+    # States: 0=clear, 1=blocked
+    # Transition: P(next | current)
+    trans = {0: {0: 0.85, 1: 0.15}, 1: {0: 0.40, 1: 0.60}}
+    # Observation: P(delay_observed | state)
+    obs_model = {0: 0.10, 1: 0.80}   # P(observe delay | state)
+    # Observations: delay seen at t1,t2; clear at t3,t4
+    observations = [True, True, False, True]
+
+    belief = {0: 0.7, 1: 0.3}  # initial belief: likely clear
+    print(f"  t=0 (prior)   : P(clear)={belief[0]:.3f}  P(blocked)={belief[1]:.3f}")
+
+    for t, obs in enumerate(observations, 1):
+        # Predict
+        new_belief = {}
+        for s in [0, 1]:
+            new_belief[s] = sum(trans[prev][s] * belief[prev] for prev in [0, 1])
+        # Update (Bayes)
+        for s in [0, 1]:
+            lhood = obs_model[s] if obs else (1 - obs_model[s])
+            new_belief[s] *= lhood
+        total = sum(new_belief.values())
+        belief = {s: new_belief[s] / total for s in [0, 1]}
+        obs_str = "delay" if obs else "clear"
+        print(f"  t={t} obs={obs_str:<6}: P(clear)={belief[0]:.3f}  P(blocked)={belief[1]:.3f}")
+
+# ------------------------------------------------
+# Sensor Fusion: combine two sensors
+# ------------------------------------------------
+def sensor_fusion() -> None:
+    print("\n  --- Sensor Fusion: Road Condition ---")
+    # Sensor 1: satellite image (P(blocked) = 0.65)
+    # Sensor 2: driver report   (P(blocked) = 0.80)
+    # Fuse assuming conditional independence
+    p_b_s1 = 0.65
+    p_b_s2 = 0.80
+    prior   = 0.30   # base rate of blockage
+
+    # Joint update via Bayes
+    # P(B | s1, s2) ∝ P(s1|B) P(s2|B) P(B)
+    p_s1_b  = p_b_s1
+    p_s1_nb = 1 - p_b_s1
+    p_s2_b  = p_b_s2
+    p_s2_nb = 1 - p_b_s2
+
+    unnorm_b  = p_s1_b  * p_s2_b  * prior
+    unnorm_nb = p_s1_nb * p_s2_nb * (1 - prior)
+    total     = unnorm_b + unnorm_nb
+    fused     = unnorm_b / total
+
+    print(f"  Prior P(blocked)              = {prior:.3f}")
+    print(f"  Sensor 1 P(blocked reported)  = {p_b_s1:.3f}")
+    print(f"  Sensor 2 P(blocked reported)  = {p_b_s2:.3f}")
+    print(f"  Fused P(blocked | both agree) = {fused:.4f}")
+
+# ------------------------------------------------
+# Expected Utility for Route Decision
+# ------------------------------------------------
+def expected_utility() -> None:
+    print("\n  --- Expected Utility: Route Selection ---")
+    p_rb_given_delay = 0.72  # from Bayes result
+    routes = {
+        "Route A (direct)": {
+            "cost_if_clear":   8,
+            "cost_if_blocked": 20,
+            "p_blocked":       p_rb_given_delay
+        },
+        "Route B (detour)": {
+            "cost_if_clear":   14,
+            "cost_if_blocked": 14,
+            "p_blocked":       0.10
+        }
+    }
+    print(f"  {'Route':<22} {'EU(cost)':<12} {'Decision'}")
+    print("  " + "-" * 44)
+    best_route, best_eu = None, float("inf")
+    for name, r in routes.items():
+        pb  = r["p_blocked"]
+        eu  = pb * r["cost_if_blocked"] + (1 - pb) * r["cost_if_clear"]
+        print(f"  {name:<22} {eu:<12.3f}")
+        if eu < best_eu:
+            best_eu, best_route = eu, name
+    print(f"\n  Best route (min expected cost): {best_route}  EU={best_eu:.3f}")
+
+# ================================================
+# MAIN
+# ================================================
+print("\n" + "=" * 52)
+print("   CO5: PROBABILISTIC REASONING")
+print("=" * 52)
+bayes_rule_demo()
+variable_elimination()
+hmm_tracking()
+sensor_fusion()
+expected_utility()
+print("\n" + "=" * 52)
+print("   CO5 Complete")
+print("=" * 52)
