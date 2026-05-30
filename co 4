@@ -1,0 +1,169 @@
+from typing import Tuple, Dict, List, Optional
+import math
+
+# ------------------------------------------------
+# Game State: resource units distributed to camps
+# ------------------------------------------------
+CAMPS        = ["CampA", "CampB", "CampC", "CampD"]
+CAMP_NEEDS   = {"CampA": 100, "CampB": 150, "CampC": 80, "CampD": 70}
+TOTAL_SUPPLY = 200
+MAX_DEPTH    = 4
+
+nodes_explored = 0
+nodes_pruned   = 0
+
+# ------------------------------------------------
+# Utility / Evaluation Function
+# ------------------------------------------------
+def utility(allocation: Dict[str, int]) -> float:
+    """
+    Score = weighted coverage ratio.
+    Camps with higher need get higher weight.
+    Range: 0.0 (no camps supplied) to 1.0 (all fully supplied).
+    """
+    total_need = sum(CAMP_NEEDS.values())
+    score = 0.0
+    for camp, need in CAMP_NEEDS.items():
+        given = allocation.get(camp, 0)
+        weight = need / total_need
+        coverage = min(given / need, 1.0)
+        score += weight * coverage
+    return round(score, 4)
+
+# ------------------------------------------------
+# Generate possible moves (splits of remaining)
+# ------------------------------------------------
+def get_moves(remaining: int, camps_left: List[str]) -> List[Dict[str, int]]:
+    """Generate discrete allocation moves for the next camp."""
+    if not camps_left:
+        return [{}]
+    camp = camps_left[0]
+    need = CAMP_NEEDS[camp]
+    # Offer 3 options: 0%, 50%, 100% of need (capped at remaining)
+    options = sorted(set([0, min(need // 2, remaining), min(need, remaining)]))
+    moves = []
+    for give in options:
+        moves.append({camp: give, "_remaining": remaining - give})
+    return moves
+
+# ------------------------------------------------
+# Minimax with Alpha-Beta Pruning
+# ------------------------------------------------
+def minimax(allocation: Dict[str, int],
+            remaining: int,
+            camps_left: List[str],
+            depth: int,
+            is_max: bool,
+            alpha: float,
+            beta: float,
+            trace: List[str]) -> Tuple[float, Dict[str, int]]:
+    global nodes_explored, nodes_pruned
+
+    indent = "  " + "  " * (MAX_DEPTH - depth)
+
+    if depth == 0 or not camps_left:
+        score = utility(allocation)
+        nodes_explored += 1
+        trace.append(f"{indent}LEAF  alloc={allocation}  score={score}")
+        return score, allocation
+
+    moves = get_moves(remaining, camps_left)
+    best_alloc = allocation
+
+    if is_max:
+        best = -math.inf
+        for move in moves:
+            camp = camps_left[0]
+            give = move[camp]
+            new_alloc = {**allocation, camp: give}
+            new_remaining = move["_remaining"]
+            trace.append(f"{indent}MAX tries {camp}={give} (remaining={new_remaining})")
+            val, alloc = minimax(new_alloc, new_remaining, camps_left[1:],
+                                 depth - 1, False, alpha, beta, trace)
+            if val > best:
+                best = val
+                best_alloc = alloc
+            alpha = max(alpha, best)
+            if beta <= alpha:
+                nodes_pruned += 1
+                trace.append(f"{indent}  PRUNE (alpha={alpha:.3f} >= beta={beta:.3f})")
+                break
+        return best, best_alloc
+    else:
+        best = math.inf
+        for move in moves:
+            camp = camps_left[0]
+            give = move[camp]
+            new_alloc = {**allocation, camp: give}
+            new_remaining = move["_remaining"]
+            trace.append(f"{indent}MIN tries {camp}={give} (remaining={new_remaining})")
+            val, alloc = minimax(new_alloc, new_remaining, camps_left[1:],
+                                 depth - 1, True, alpha, beta, trace)
+            if val < best:
+                best = val
+                best_alloc = alloc
+            beta = min(beta, best)
+            if beta <= alpha:
+                nodes_pruned += 1
+                trace.append(f"{indent}  PRUNE (alpha={alpha:.3f} >= beta={beta:.3f})")
+                break
+        return best, best_alloc
+
+# ------------------------------------------------
+# Bounded Rationality: depth-limited evaluation
+# ------------------------------------------------
+def compare_depth_limits() -> None:
+    print("\n  Depth-Limit Impact on Decision Quality:")
+    print(f"  {'Depth':<8} {'Score':<10} {'Nodes':<10} {'Pruned'}")
+    print("  " + "-" * 36)
+    for d in [1, 2, 3, 4]:
+        global nodes_explored, nodes_pruned
+        nodes_explored = 0
+        nodes_pruned = 0
+        old_max = globals()['MAX_DEPTH']
+        globals()['MAX_DEPTH'] = d
+        score, _ = minimax({}, TOTAL_SUPPLY, CAMPS, d, True,
+                            -math.inf, math.inf, [])
+        globals()['MAX_DEPTH'] = old_max
+        print(f"  {d:<8} {score:<10} {nodes_explored:<10} {nodes_pruned}")
+
+# ================================================
+# MAIN
+# ================================================
+print("\n" + "=" * 52)
+print("   CO4: MINIMAX + ALPHA-BETA PRUNING")
+print("=" * 52)
+print(f"\n  MAX player: Relief Agency (maximize coverage)")
+print(f"  MIN player: Adversary    (minimize coverage)")
+print(f"  Total supply : {TOTAL_SUPPLY}")
+print(f"  Camp needs   : {CAMP_NEEDS}")
+
+trace: List[str] = []
+nodes_explored = 0
+nodes_pruned   = 0
+
+best_score, best_alloc = minimax({}, TOTAL_SUPPLY, CAMPS, MAX_DEPTH,
+                                  True, -math.inf, math.inf, trace)
+
+print("\n  --- Search Trace (first 20 lines) ---")
+for line in trace[:20]:
+    print(line)
+if len(trace) > 20:
+    print(f"  ... ({len(trace) - 20} more lines)")
+
+print(f"\n  Best allocation for MAX player:")
+for camp, given in best_alloc.items():
+    need = CAMP_NEEDS[camp]
+    pct  = round(given / need * 100)
+    print(f"    {camp:<10}: {given:>4} / {need} units ({pct}%)")
+
+print(f"\n  Utility score    : {best_score}")
+print(f"  Nodes explored   : {nodes_explored}")
+print(f"  Branches pruned  : {nodes_pruned}")
+
+compare_depth_limits()
+print("\n  Bounded rationality: shallower depth = faster")
+print("  but may miss better allocations (lower score).")
+print("\n" + "=" * 52)
+print("   CO4 Complete")
+print("=" * 52)
