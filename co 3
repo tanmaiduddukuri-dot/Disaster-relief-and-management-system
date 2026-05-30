@@ -1,0 +1,198 @@
+from typing import Dict, List, Optional, Tuple
+import random
+
+CAMPS     = ["CampA", "CampB", "CampC", "CampD"]
+SLOTS     = [1, 2, 3, 4]   # delivery time slots
+
+# ------------------------------------------------
+# Constraint Definitions
+# ------------------------------------------------
+def constraint_all_diff(assignment: Dict[str, int]) -> bool:
+    vals = list(assignment.values())
+    return len(vals) == len(set(vals))
+
+def constraint_order(assignment: Dict[str, int]) -> bool:
+    """CampA must be scheduled before CampD."""
+    if "CampA" in assignment and "CampD" in assignment:
+        return assignment["CampA"] < assignment["CampD"]
+    return True
+
+def constraint_non_adjacent(assignment: Dict[str, int]) -> bool:
+    """CampB and CampC cannot be in adjacent slots."""
+    if "CampB" in assignment and "CampC" in assignment:
+        return abs(assignment["CampB"] - assignment["CampC"]) > 1
+    return True
+
+def is_consistent(assignment: Dict[str, int]) -> bool:
+    return (constraint_all_diff(assignment) and
+            constraint_order(assignment) and
+            constraint_non_adjacent(assignment))
+
+def constraint_violated(assignment: Dict[str, int]) -> Optional[str]:
+    if not constraint_all_diff(assignment):
+        return "Two camps assigned same slot (all-diff violated)"
+    if not constraint_order(assignment):
+        return f"CampA(slot {assignment.get('CampA')}) must be < CampD(slot {assignment.get('CampD')})"
+    if not constraint_non_adjacent(assignment):
+        return f"CampB(slot {assignment.get('CampB')}) and CampC(slot {assignment.get('CampC')}) are adjacent"
+    return None
+
+# ------------------------------------------------
+# MRV: Minimum Remaining Values heuristic
+# ------------------------------------------------
+def mrv_select(unassigned: List[str], assignment: Dict[str, int], domains: Dict[str, List[int]]) -> str:
+    return min(unassigned, key=lambda v: len(domains[v]))
+
+# ------------------------------------------------
+# LCV: Least Constraining Value heuristic
+# ------------------------------------------------
+def lcv_order(var: str, assignment: Dict[str, int], domains: Dict[str, List[int]]) -> List[int]:
+    def count_conflicts(val: int) -> int:
+        test = {**assignment, var: val}
+        conflicts = 0
+        for other in CAMPS:
+            if other != var and other not in assignment:
+                for oval in domains[other]:
+                    if not is_consistent({**test, other: oval}):
+                        conflicts += 1
+        return conflicts
+    return sorted(domains[var], key=count_conflicts)
+
+# ------------------------------------------------
+# Forward Checking
+# ------------------------------------------------
+def forward_check(var: str, val: int, assignment: Dict[str, int],
+                  domains: Dict[str, List[int]]) -> Optional[Dict[str, List[int]]]:
+    new_domains = {k: list(v) for k, v in domains.items()}
+    for other in CAMPS:
+        if other not in assignment and other != var:
+            new_domains[other] = [
+                v for v in new_domains[other]
+                if is_consistent({**assignment, var: val, other: v})
+            ]
+            if not new_domains[other]:
+                return None   # domain wipeout
+    return new_domains
+
+# ------------------------------------------------
+# Backtracking Search
+# ------------------------------------------------
+def backtrack(assignment: Dict[str, int],
+              domains: Dict[str, List[int]],
+              depth: int = 0) -> Optional[Dict[str, int]]:
+    if len(assignment) == len(CAMPS):
+        return assignment
+
+    unassigned = [c for c in CAMPS if c not in assignment]
+    var = mrv_select(unassigned, assignment, domains)
+    ordered_vals = lcv_order(var, assignment, domains)
+
+    indent = "  " + "  " * depth
+    print(f"{indent}Trying {var} | domain={domains[var]} | MRV pick | LCV order={ordered_vals}")
+
+    for val in ordered_vals:
+        test = {**assignment, var: val}
+        reason = constraint_violated(test)
+        if reason is None:
+            new_domains = forward_check(var, val, test, domains)
+            if new_domains is not None:
+                print(f"{indent}  Assign {var}=slot {val} [OK] -> forward check passed")
+                result = backtrack(test, new_domains, depth + 1)
+                if result is not None:
+                    return result
+            else:
+                print(f"{indent}  Assign {var}=slot {val} [PRUNED by forward check]")
+        else:
+            print(f"{indent}  Assign {var}=slot {val} [FAIL] Reason: {reason}")
+
+    print(f"{indent}  Backtrack from {var}")
+    return None
+
+# ------------------------------------------------
+# Min-Conflicts Local Search
+# ------------------------------------------------
+def count_conflicts_for(camp: str, val: int, assignment: Dict[str, int]) -> int:
+    test = {**assignment, camp: val}
+    c = 0
+    if not constraint_all_diff(test):
+        c += 1
+    if not constraint_order(test):
+        c += 1
+    if not constraint_non_adjacent(test):
+        c += 1
+    return c
+
+def min_conflicts(max_steps: int = 5000) -> Optional[Dict[str, int]]:
+    # Start from a complete assignment
+    assignment = {}
+    for i, camp in enumerate(CAMPS):
+        assignment[camp] = SLOTS[i % len(SLOTS)]
+
+    for step in range(max_steps):
+        if is_consistent(assignment):
+            return assignment
+        # Find conflicted variables
+        conflicted = []
+        for camp in CAMPS:
+            test = dict(assignment)
+            original = test[camp]
+            conflicts = 0
+            for other_val in SLOTS:
+                test[camp] = other_val
+                if not is_consistent(test):
+                    conflicts += 1
+            test[camp] = original
+            if not is_consistent({k: v for k, v in assignment.items() if k == camp or k in assignment}):
+                conflicted.append(camp)
+        # Simpler: just pick any camp involved in a violation
+        conflicted = [c for c in CAMPS if
+                      any(not is_consistent({**assignment, c: v}) == is_consistent(assignment)
+                          for v in SLOTS)]
+        if not conflicted:
+            conflicted = CAMPS
+        var = random.choice(conflicted)
+        best_val = min(SLOTS, key=lambda v: count_conflicts_for(var, v, {**assignment, var: v}))
+        assignment[var] = best_val
+    return None
+
+# ================================================
+# MAIN
+# ================================================
+print("\n" + "=" * 52)
+print("   CO3: CSP — CAMP DELIVERY SCHEDULING")
+print("=" * 52)
+print("\n  Camps : CampA, CampB, CampC, CampD")
+print("  Slots : 1, 2, 3, 4")
+print("  Constraints:")
+print("    1. All camps get different time slots")
+print("    2. CampA slot < CampD slot (order)")
+print("    3. |CampB slot - CampC slot| > 1 (non-adjacent)")
+
+print("\n  --- Backtracking + MRV + LCV + Forward Checking ---")
+domains = {camp: list(SLOTS) for camp in CAMPS}
+solution = backtrack({}, domains)
+
+if solution:
+    print(f"\n  Solution found:")
+    for camp, slot in sorted(solution.items(), key=lambda x: x[1]):
+        print(f"    Slot {slot}: {camp}")
+    reason = constraint_violated(solution)
+    print(f"  Constraint check: {'ALL SATISFIED' if reason is None else reason}")
+else:
+    print("\n  No solution found by backtracking.")
+
+print("\n  --- Min-Conflicts Local Search ---")
+random.seed(7)
+mc_solution = min_conflicts()
+if mc_solution:
+    print(f"  Solution found:")
+    for camp, slot in sorted(mc_solution.items(), key=lambda x: x[1]):
+        print(f"    Slot {slot}: {camp}")
+    reason = constraint_violated(mc_solution)
+    print(f"  Constraint check: {'ALL SATISFIED' if reason is None else reason}")
+else:
+    print("  No solution found by min-conflicts.")
+
+print("\n" + "=" * 52)
+print("   CO3 Complete")
+print("=" * 52)
